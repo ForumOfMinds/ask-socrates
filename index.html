@@ -51,14 +51,17 @@
   .authsubmit:disabled { opacity: .5; cursor: default; }
   .authmsg { font-size: 13px; color: var(--parchment-dim); font-family: 'Inter', sans-serif; min-height: 18px; line-height: 1.5; margin-top: 2px; }
   .authmsg.err { color: #d98c6a; }
-  .authdisc { font-size: 11px; color: var(--dim); letter-spacing: .03em; margin-top: 30px; max-width: 340px; line-height: 1.5; }
+  .authback { margin-top: 18px; }
+  .authback button { background: transparent; border: none; color: var(--dim); font-family: 'Inter', sans-serif; font-size: 12px; cursor: pointer; text-decoration: underline; }
+  .authback button:hover { color: var(--gold); }
+  .authdisc { font-size: 11px; color: var(--dim); letter-spacing: .03em; margin-top: 26px; max-width: 340px; line-height: 1.5; }
 
   /* ---- Account bar ---- */
   .acct { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 12px 4px 0; font-size: 12px; color: var(--dim); }
   .acct button { background: transparent; border: none; color: var(--parchment-dim); font-family: 'Inter', sans-serif; font-size: 12px; cursor: pointer; text-decoration: underline; }
   .acct button:hover { color: var(--gold); }
 
-  /* ---- Dialogue (unchanged) ---- */
+  /* ---- Dialogue ---- */
   header { padding: 22px 4px 14px; text-align: center; border-bottom: 1px solid var(--surface-edge); }
   .mark { font-family: 'EB Garamond', serif; font-size: 30px; letter-spacing: 0.04em; color: var(--parchment); font-weight: 500; }
   .mark span { color: var(--gold); }
@@ -86,6 +89,10 @@
   .dot:nth-child(3){ animation-delay: .4s; }
   @keyframes pulse { 0%,100%{ opacity:.25; transform: translateY(0);} 50%{ opacity:1; transform: translateY(-2px);} }
 
+  .endbar { text-align: center; padding: 2px 0 10px; }
+  .endbar button { background: transparent; border: none; color: var(--dim); font-family: 'Inter', sans-serif; font-size: 12px; cursor: pointer; text-decoration: underline; letter-spacing: .02em; }
+  .endbar button:hover { color: var(--gold); }
+
   .composer { border-top: 1px solid var(--surface-edge); padding: 14px 0 22px; display: flex; gap: 10px; align-items: flex-end; }
   textarea { flex: 1; resize: none; background: var(--ink-2); border: 1px solid var(--surface-edge); color: var(--parchment); font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.5; padding: 11px 14px; border-radius: 12px; max-height: 140px; outline: none; transition: border-color .2s ease; }
   textarea:focus { border-color: var(--gold); }
@@ -104,8 +111,8 @@
 <body>
 <div class="wrap">
 
-  <!-- ===== The threshold (shown when signed out) ===== -->
-  <div id="auth" class="authwrap">
+  <!-- ===== The threshold (sign in / create account) ===== -->
+  <div id="auth" class="authwrap" style="display:none">
     <div class="seal"><span class="q">Q</span></div>
     <div class="authmark">Socrates<span>Q</span></div>
     <div class="thresh">What would Socrates say?</div>
@@ -120,12 +127,13 @@
       <button id="authBtn" class="authsubmit">Sign in</button>
       <div id="authMsg" class="authmsg"></div>
     </div>
+    <div class="authback" id="authBack" style="display:none"><button id="backToTaste">← back to the conversation</button></div>
     <div class="authdisc">A philosophical reconstruction, not the historical figure — and not advice.</div>
   </div>
 
-  <!-- ===== The dialogue (shown when signed in) ===== -->
+  <!-- ===== The dialogue ===== -->
   <div id="app" style="display:none; flex:1; flex-direction:column;">
-    <div class="acct"><span id="acctEmail"></span><button id="signout">Sign out</button></div>
+    <div class="acct"><span id="acctEmail"></span><button id="acctBtn">Sign out</button></div>
     <header>
       <div class="mark">Socrates<span>Q</span></div>
       <div class="sub">an inquiry, not an answer</div>
@@ -133,10 +141,14 @@
     </header>
 
     <div class="arc" id="arc"></div>
-    <div class="arc-label" id="arcLabel">a dialogue finds its rest in seven or eight turns</div>
+    <div class="arc-label" id="arcLabel">a dialogue lasts as long as it needs — end it whenever you like</div>
 
     <div class="stream" id="stream"></div>
     <div class="err" id="err" style="display:none"></div>
+
+    <div class="endbar" id="endbar" style="display:none">
+      <button id="endBtn">End conversation</button>
+    </div>
 
     <div class="renew" id="renew" style="display:none">
       <button id="renewBtn">Begin a new inquiry</button>
@@ -164,10 +176,15 @@ const authBtn = document.getElementById('authBtn');
 const authMsg = document.getElementById('authMsg');
 const tabIn = document.getElementById('tabIn');
 const tabUp = document.getElementById('tabUp');
+const authBack = document.getElementById('authBack');
+const backToTaste = document.getElementById('backToTaste');
 const acctEmail = document.getElementById('acctEmail');
-const signoutBtn = document.getElementById('signout');
+const acctBtn = document.getElementById('acctBtn');
 
 let mode = 'signin';
+let member = false;
+let taster = false;
+let currentEmail = '';
 
 function setMode(m) {
   mode = m;
@@ -206,7 +223,7 @@ async function doAuth() {
     } else {
       const { error } = await sb.auth.signInWithPassword({ email, password: pw });
       if (error) throw error;
-      /* success -> onAuthStateChange reveals the app */
+      /* success -> onAuthStateChange -> enterMember */
     }
   } catch (e) {
     setMsg(friendly(e), true);
@@ -216,33 +233,59 @@ async function doAuth() {
 }
 
 async function signOut() {
-  resetConversation();
-  started = false;
   if (sb) await sb.auth.signOut();
+  /* SIGNED_OUT -> enterAuth */
 }
 
-function reflect(session) {
-  const signedIn = !!(session && session.user);
-  authEl.style.display = signedIn ? 'none' : 'flex';
-  appEl.style.display = signedIn ? 'flex' : 'none';
-  if (signedIn) {
-    acctEmail.textContent = session.user.email || '';
-    if (!started) { startApp(); started = true; }
-  }
+/* ---------- Views & modes ---------- */
+function showAuth() { authEl.style.display = 'flex'; appEl.style.display = 'none'; }
+function showApp() { authEl.style.display = 'none'; appEl.style.display = 'flex'; }
+
+function setAcct() {
+  if (member) { acctEmail.textContent = currentEmail; acctBtn.textContent = 'Sign out'; }
+  else { acctEmail.textContent = 'Test drive'; acctBtn.textContent = 'Sign in'; }
+}
+function startFresh() { resetConversation(); inputEl.focus(); }
+
+function enterMember(session) {
+  member = true; taster = false;
+  currentEmail = (session && session.user && session.user.email) || '';
+  setAcct(); showApp(); startFresh();
+}
+function enterTaste() {
+  member = false; taster = true; currentEmail = '';
+  setAcct(); showApp(); startFresh();
+}
+function enterAuth(preferSignup) {
+  member = false; taster = false;
+  setMode(preferSignup ? 'signup' : 'signin');
+  setMsg('');
+  /* offer a way back into the taste only if it hasn't been used up */
+  authBack.style.display = localStorage.getItem('sq_tasted') ? 'none' : 'block';
+  showAuth();
 }
 
+acctBtn.addEventListener('click', () => { if (member) signOut(); else enterAuth(false); });
 tabIn.addEventListener('click', () => setMode('signin'));
 tabUp.addEventListener('click', () => setMode('signup'));
 authBtn.addEventListener('click', doAuth);
 pwEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doAuth(); } });
 emailEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); pwEl.focus(); } });
-signoutBtn.addEventListener('click', signOut);
+backToTaste.addEventListener('click', () => { if (!localStorage.getItem('sq_tasted')) enterTaste(); });
 
 if (sb) {
-  sb.auth.onAuthStateChange((_event, session) => reflect(session));
-  (async () => { const { data } = await sb.auth.getSession(); reflect(data.session); })();
+  sb.auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_IN' && session && session.user) enterMember(session);
+    else if (event === 'SIGNED_OUT') enterAuth(false);
+  });
+  (async () => {
+    const { data } = await sb.auth.getSession();
+    if (data.session && data.session.user) enterMember(data.session);
+    else if (localStorage.getItem('sq_tasted')) enterAuth(true);
+    else enterTaste();
+  })();
 } else {
-  setMsg('Could not reach the sign-in service. Reload and try again.', true);
+  enterTaste();
 }
 
 /* ---------- The dialogue ---------- */
@@ -253,7 +296,6 @@ const ARC_TICKS = 8;
 let convo = [];
 let busy = false;
 let closed = false;
-let started = false;
 
 const streamEl = document.getElementById('stream');
 const inputEl = document.getElementById('input');
@@ -262,6 +304,9 @@ const arcEl = document.getElementById('arc');
 const arcLabel = document.getElementById('arcLabel');
 const errEl = document.getElementById('err');
 const renewEl = document.getElementById('renew');
+const renewBtn = document.getElementById('renewBtn');
+const endbarEl = document.getElementById('endbar');
+const endBtn = document.getElementById('endBtn');
 
 for (let i = 0; i < ARC_TICKS; i++) { const t = document.createElement('div'); t.className = 'tick'; arcEl.appendChild(t); }
 
@@ -295,10 +340,22 @@ function render() {
   }
   streamEl.scrollTop = streamEl.scrollHeight;
   updateArc();
+
   const done = closed || userTurns() >= ARC_TICKS;
-  renewEl.style.display = done ? 'block' : 'none';
+  endbarEl.style.display = (!done && !busy && userTurns() >= 1) ? 'block' : 'none';
+
+  if (done) {
+    if (taster) localStorage.setItem('sq_tasted', '1');
+    renewEl.style.display = 'block';
+    renewBtn.textContent = member ? 'Begin a new inquiry' : 'Create an account to continue';
+  } else {
+    renewEl.style.display = 'none';
+  }
+
   inputEl.disabled = done;
-  inputEl.placeholder = done ? 'This inquiry has come to rest — begin a new one below.' : 'Put your question to Socrates…';
+  inputEl.placeholder = done
+    ? (member ? 'This inquiry has come to rest — begin a new one below.' : 'Your conversation has come to rest.')
+    : 'Put your question to Socrates…';
   sendEl.disabled = done || busy;
 }
 
@@ -333,11 +390,38 @@ async function send() {
   }
 }
 
+async function endConversation() {
+  if (busy || closed || userTurns() < 1) return;
+  errEl.style.display = 'none';
+  busy = true; render();
+  const n = userTurns();
+  try {
+    const res = await fetch(API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ending: true,
+        userTurns: n,
+        messages: convo.map(m => ({ role: m.role, content: m.text }))
+      })
+    });
+    if (!res.ok) throw new Error('status ' + res.status);
+    const data = await res.json();
+    convo.push({ role: 'assistant', text: (data.text || '\u2026') });
+    closed = true;
+  } catch (e) {
+    errEl.textContent = 'The line to Socrates faltered. Give it another try in a moment.';
+    errEl.style.display = 'block';
+  } finally {
+    busy = false; render();
+  }
+}
+
 function resetConversation() {
   convo = []; closed = false;
   errEl.style.display = 'none';
   arcLabel.style.color = '';
-  arcLabel.textContent = 'a dialogue finds its rest in seven or eight turns';
+  arcLabel.textContent = 'a dialogue lasts as long as it needs — end it whenever you like';
   render();
 }
 
@@ -347,11 +431,13 @@ function renew() {
 }
 
 sendEl.addEventListener('click', send);
-document.getElementById('renewBtn').addEventListener('click', renew);
+endBtn.addEventListener('click', endConversation);
+renewBtn.addEventListener('click', () => {
+  if (member) { renew(); }
+  else { localStorage.setItem('sq_tasted', '1'); enterAuth(true); }
+});
 inputEl.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
 inputEl.addEventListener('input', () => { inputEl.style.height = 'auto'; inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + 'px'; });
-
-function startApp() { render(); inputEl.focus(); }
 </script>
 </body>
 </html>
