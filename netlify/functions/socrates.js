@@ -185,6 +185,77 @@ exports.handler = async (event) => {
     }
   }
 
+  // ---- Conversation meter ----
+  // Fires only on the first turn of a new conversation, for signed-in members.
+  // Anonymous tasters are already limited via localStorage; no server meter needed.
+  const FREE_LIMIT = 5;
+  const SB_URL = 'https://lhreleeqqchskicxgocc.supabase.co';
+  const sbKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  let remaining = null;
+
+  const authHeader = (event.headers || {})['authorization'] || (event.headers || {})['Authorization'] || '';
+  const userToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  if (userToken && sbKey && turns === 1 && !ending) {
+    try {
+      // 1. Verify the session token and get the user's ID
+      const authRes = await fetch(`${SB_URL}/auth/v1/user`, {
+        headers: { 'Authorization': `Bearer ${userToken}`, 'apikey': sbKey }
+      });
+      if (!authRes.ok) {
+        return { statusCode: 401, body: JSON.stringify({ error: 'Invalid session. Please sign in again.' }) };
+      }
+      const userData = await authRes.json();
+      const userId = userData.id;
+
+      // 2. Get this user's current usage row
+      const currentPeriod = new Date().toISOString().slice(0, 7); // YYYY-MM
+      const usageRes = await fetch(
+        `${SB_URL}/rest/v1/usage?user_id=eq.${userId}&select=conversations_used,period`,
+        { headers: { 'Authorization': `Bearer ${sbKey}`, 'apikey': sbKey } }
+      );
+      const usageData = await usageRes.json();
+
+      let used = 0;
+      if (Array.isArray(usageData) && usageData.length > 0) {
+        const row = usageData[0];
+        // If same month, use the stored count; if new month, reset to 0
+        used = (row.period === currentPeriod) ? row.conversations_used : 0;
+      }
+
+      // 3. Check limit — stop before calling Anthropic
+      if (used >= FREE_LIMIT) {
+        return {
+          statusCode: 429,
+          body: JSON.stringify({ error: 'limit_reached', used, limit: FREE_LIMIT })
+        };
+      }
+
+      // 4. Increment (upsert — merge on primary key user_id)
+      await fetch(`${SB_URL}/rest/v1/usage`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${sbKey}`,
+          'apikey': sbKey,
+          'Content-Type': 'application/json',
+          'Prefer': 'resolution=merge-duplicates'
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          conversations_used: used + 1,
+          period: currentPeriod
+        })
+      });
+
+      remaining = FREE_LIMIT - (used + 1);
+    } catch (meterErr) {
+      console.error('METER ERROR: ' + (meterErr && meterErr.message ? meterErr.message : meterErr));
+      // Don't block the conversation on a meter error — let it through
+    }
+  }
+  // ---- End meter ----
+
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -217,7 +288,7 @@ exports.handler = async (event) => {
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text || '…' })
+      body: JSON.stringify({ text: text || '…', remaining })
     };
   } catch (e) {
     console.error('FUNCTION CRASH: ' + (e && e.message ? e.message : e));
