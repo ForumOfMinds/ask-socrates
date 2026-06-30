@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>SocratesQ</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500;600&display=swap');
 
@@ -152,6 +153,10 @@
 
     <div class="renew" id="renew" style="display:none">
       <button id="renewBtn">Begin a new inquiry</button>
+    </div>
+
+    <div id="pdfBar" style="display:none;text-align:center;padding:2px 0 6px;">
+      <button id="pdfBtn" style="background:transparent;border:none;color:var(--parchment-dim);font-family:'EB Garamond',serif;font-style:italic;font-size:14px;cursor:pointer;text-decoration:underline;letter-spacing:.01em;">Save this dialogue as PDF</button>
     </div>
 
     <div id="limitReached" style="display:none;text-align:center;padding:18px 12px 10px;">
@@ -323,6 +328,82 @@ const endBtn = document.getElementById('endBtn');
 const remainingEl = document.getElementById('remaining');
 const limitEl = document.getElementById('limitReached');
 const forumLinkEl = document.getElementById('forumLink');
+const pdfBarEl = document.getElementById('pdfBar');
+const pdfBtn = document.getElementById('pdfBtn');
+
+function saveAsPDF() {
+  if (!window.jspdf) { alert('PDF library not loaded. Please reload the page and try again.'); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+
+  const W = doc.internal.pageSize.getWidth();
+  const H = doc.internal.pageSize.getHeight();
+  const ML = 60, MR = 60, MT = 64, MB = 64;
+  const TW = W - ML - MR;
+  let y = MT;
+
+  function checkPage(needed) {
+    if (y + needed > H - MB) { doc.addPage(); y = MT; }
+  }
+  function rule() {
+    doc.setDrawColor(180, 155, 90); doc.setLineWidth(0.5);
+    doc.line(ML, y, W - MR, y); y += 18;
+  }
+
+  // Header
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(22);
+  doc.setTextColor(30, 25, 15);
+  doc.text('SocratesQ', ML, y);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(130, 118, 95);
+  const dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  doc.text(dateStr, W - MR, y, { align: 'right' });
+  y += 16;
+  rule();
+
+  // Turns — greeting first, then the conversation
+  const turns = [{ role: 'assistant', text: GREETING }, ...convo];
+  for (const m of turns) {
+    const isUser = m.role === 'user';
+    // Speaker label
+    checkPage(44);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(isUser ? 95 : 155, isUser ? 125 : 125, isUser ? 60 : 52);
+    doc.setCharSpace(1.8);
+    doc.text(isUser ? 'YOU' : 'SOCRATES', ML, y);
+    doc.setCharSpace(0);
+    y += 14;
+    // Body
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(12);
+    doc.setTextColor(28, 24, 14);
+    const lines = doc.splitTextToSize(m.text, TW);
+    checkPage(lines.length * 17);
+    doc.text(lines, ML, y);
+    y += lines.length * 17 + 18;
+  }
+
+  // Footer
+  checkPage(70);
+  y += 6;
+  rule();
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(11);
+  doc.setTextColor(158, 128, 52);
+  doc.text('Bring your question to the Council — forumofminds.com', ML, y);
+  y += 18;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(140, 128, 110);
+  doc.text('A philosophical reconstruction, not the historical figure — and not advice.', ML, y);
+
+  doc.save('SocratesQ-' + new Date().toISOString().slice(0, 10) + '.pdf');
+}
+
+if (pdfBtn) pdfBtn.addEventListener('click', saveAsPDF);
 
 async function getToken() {
   if (!member || !sb) return null;
@@ -378,9 +459,12 @@ function render() {
     renewEl.style.display = 'block';
     renewBtn.textContent = member ? 'Begin a new inquiry' : 'Create an account to continue';
     if (forumLinkEl) forumLinkEl.style.display = 'block';
+    if (pdfBarEl) pdfBarEl.style.display = 'block';
   } else {
     renewEl.style.display = 'none';
     if (forumLinkEl) forumLinkEl.style.display = 'none';
+  if (pdfBarEl) pdfBarEl.style.display = 'none';
+    if (pdfBarEl) pdfBarEl.style.display = 'none';
   }
 
   inputEl.disabled = done;
